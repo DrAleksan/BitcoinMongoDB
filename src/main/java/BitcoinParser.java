@@ -5,16 +5,24 @@
 import com.mongodb.*;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.UnknownHostException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 import org.bitcoinj.core.*;
 import org.bitcoinj.core.Block;
 import org.bitcoinj.core.Transaction;
 import org.bitcoinj.params.MainNetParams;
 import org.bitcoinj.utils.BlockFileLoader;
+import org.bson.Document;
 import org.spongycastle.crypto.digests.RIPEMD160Digest;
 
 import java.util.ArrayList;
@@ -23,31 +31,42 @@ import java.util.List;
 
 public class BitcoinParser {
     int BLOCKS_SIZE_LOCKER = 1000;
-    public static final String blockchainPath = "/home/alexandr/Загрузки/blockchain/blocks";
+    private String blockchainPath = "/home/alexandr/Загрузки/blockchain/blocks";
 
     private NetworkParameters np;
     private MongoClient mongoClient;
-    private DB database;
+//    private DB database;
+    private MongoDatabase database;
 
+    public BitcoinParser(String path, MongoClient mongoClient, MongoDatabase database){
+        this.blockchainPath = path;
+        this.np = new MainNetParams();
+        Context.getOrCreate(MainNetParams.get());
+        this.mongoClient = mongoClient;
+        this.database = database;
+    }
 
-    public BitcoinParser(){
+    public void startParsing(){
+        parseTransactions();
+        parseUsers();
+    }
+/*
+    public BitcoinParser() {
         np = new MainNetParams();
-        try {
-            mongoClient = new MongoClient();
-        } catch(UnknownHostException e){
-            System.out.println("UnknownHostException");
-            e.printStackTrace();
-        }
+
+        mongoClient = new MongoClient();
         database = mongoClient.getDB("Bitcoin");
         Context.getOrCreate(MainNetParams.get());
     }
-
+*/
     void parseTransactions(){
-        DBCollection transaction = database.getCollection("Transaction");
+        MongoCollection<Document> transaction = database.getCollection("Transaction");
 
         List<File> blockChainFiles = new ArrayList<File>();
 
-        File file = new File("/home/alexandr/Загрузки/blockchain/blocks/blk00000.dat");
+///        File file = new File("/home/alexandr/Загрузки/blockchain/blocks/blk00000.dat");
+
+        File file = getFileFromPath();
 
         blockChainFiles.add(file);
 
@@ -63,7 +82,7 @@ public class BitcoinParser {
             }
             List<Transaction> transactions = block.getTransactions();
             for(Transaction ts: transactions){
-                BasicDBObject transactionDocument = new BasicDBObject();
+                Document transactionDocument = new Document();
 
                 transactionDocument.put("id", ts.getHash().toString());
 
@@ -98,17 +117,19 @@ public class BitcoinParser {
                 transactionDocument.put("inputs", inputList);
                 transactionDocument.put("outputs", outputList);
 
-                transaction.insert(transactionDocument);
+                transaction.insertOne(transactionDocument);
             }
         }
     }
 
     public void parseUsers(){
-        DBCollection user = database.getCollection("User");
-        DBCollection transaction = database.getCollection("Transaction");
+        MongoCollection<Document> user = database.getCollection("User");
+        MongoCollection<Document> transaction = database.getCollection("Transaction");
         List<File> blockChainFiles = new ArrayList<File>();
 
-        File file = new File("/home/alexandr/Загрузки/blockchain/blocks/blk00000.dat");
+///        File file = new File("/home/alexandr/Загрузки/blockchain/blocks/blk00000.dat");
+
+        File file = getFileFromPath();
 
         blockChainFiles.add(file);
 
@@ -151,10 +172,12 @@ public class BitcoinParser {
 
                         where.put("id", addr.toString());
 
-                        DBObject doc = user.findOne(where);
+                        Document doc = user.find(where).first();
+
+//                        DBObject doc = user.findOne(where);
 
                         if(doc == null){
-                            BasicDBObject nDocument = new BasicDBObject();
+                            Document nDocument = new Document();
                             nDocument.put("id", addr.toString());
 
                             BasicDBList list = new BasicDBList();
@@ -165,15 +188,15 @@ public class BitcoinParser {
 
                             nDocument.put("outputs", list);
 
-                            user.insert(nDocument);
+                            user.insertOne(nDocument);
                         } else {
-                            DBObject findQuery = new BasicDBObject("id", addr.toString());
-                            DBObject listItem = new BasicDBObject("outputs", new BasicDBObject("transaction_id", to.toString()).
+                            Document findQuery = new Document("id", addr.toString());
+                            Document listItem = new Document("outputs", new BasicDBObject("transaction_id", to.toString()).
                                     append("index", to.getIndex()).
                                     append("value", to.getValue().toString()));
-                            DBObject updateQuery = new BasicDBObject("$push", listItem);
+                            Document updateQuery = new Document("$push", listItem);
 
-                            user.update(findQuery, updateQuery);
+                            user.updateOne(findQuery, updateQuery);
                         }
                     } catch (Exception e){ /// !!!!!
                         System.out.println(e.toString());
@@ -192,30 +215,32 @@ public class BitcoinParser {
                     long index = in.getOutpoint().getIndex();
 
 
-                    BasicDBObject query = new BasicDBObject("id", hash.toString()).
+                    Document query = new Document("id", hash.toString()).
                             append("outputs.index", index);
 
-                    DBObject doc = transaction.findOne(query);
+                    Document doc = transaction.find(query).first();
 
 
                     if(doc == null){
                         System.out.println(in.isCoinBase());
                         System.out.println(hash);
                         System.out.println("Alarm!!!!!! Cant find such transaction id:" + hash.toString() + "  index:" + index);
-                        return;
+//                        return;
+                        continue;
                     } else {
-                        BasicDBList outputs = (BasicDBList) doc.get("outputs");
-                        BasicDBObject output = (BasicDBObject) outputs.get(0);
+//                        BasicDBList outputs = (BasicDBList) doc.get("outputs");
+                        List<Document> outputs = (List<Document>) doc.get("outputs");
+                        Document output = (Document) outputs.get(0);
                         String addr = (String) output.get("addr");
 
-                        BasicDBObject userQuery = new BasicDBObject("addr", addr);
+                        Document userQuery = new Document("addr", addr);
 
-                        BasicDBObject elemToDelete = new BasicDBObject("transaction_id", hash.toString()).
+                        Document elemToDelete = new Document("transaction_id", hash.toString()).
                                 append("index", index);
 
-                        BasicDBObject deleteQuery = new BasicDBObject("$pull", elemToDelete);
+                        Document deleteQuery = new Document("$pull", elemToDelete);
                         System.out.println("deleted");
-                        user.update(userQuery, deleteQuery);
+                        user.updateOne(userQuery, deleteQuery);
                     }
                 }
             }
@@ -250,10 +275,27 @@ public class BitcoinParser {
         return new String(hexChars);
     }
 
+
+    private File getFileFromPath(){
+        Path path = Paths.get(blockchainPath);
+
+        File result = null;
+
+        try{
+            DirectoryStream<Path> stream = Files.newDirectoryStream(path, "*.dat");
+            result =  stream.iterator().next().toFile();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        return result;
+    }
+
     public static void main(String args[]){
-        BitcoinParser bp = new BitcoinParser();
-        bp.parseTransactions();
-        bp.parseUsers();
+///        BitcoinParser bp = new BitcoinParser();
+///        bp.parseTransactions();
+///        bp.parseUsers();
 ///        System.out.println(getBlocksFrom("/home/alexandr/Загрузки/blockchain/blocks/blk00004.dat"));
     }
 }
